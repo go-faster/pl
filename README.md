@@ -41,3 +41,28 @@ untouched, so mixed output is safe. Disable colors with `--no-color` or by setti
     --no-time     omit timestamps from the output
     --level       minimum level to display (debug|info|warn|error)
 ```
+
+### Level styles
+
+Levels render as a single colored character by default — `D`, `I`, `W`, `E`,
+and `C` for dpanic/panic/fatal:
+
+```
+03:00:00.099 D verbose detail
+03:00:00.200 I metrics Starting attempt=3
+03:00:00.299 W disk low note="needs attention"
+03:00:00.400 E boom err=x
+03:00:00.500 C giving up
+```
+
+When used as a library, override per-level label and color via
+`Formatter.LevelStyles` (levels absent from the map keep their defaults):
+
+```go
+f := &pl.Formatter{
+    Color: true,
+    LevelStyles: map[zapcore.Level]pl.LevelStyle{
+        zapcore.WarnLevel: {Label: "WARN", Color: "\033[33m"},
+    },
+}
+```

@@ -5,7 +5,6 @@ package pl
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -48,6 +47,29 @@ const (
 	colBold    = "\033[1m"
 )
 
+// LevelStyle controls how a single log level is rendered.
+type LevelStyle struct {
+	// Label is the text shown for the level (e.g. "I" for info).
+	Label string
+	// Color is the ANSI escape sequence applied to the label. Empty means no
+	// color. Ignored when the Formatter has Color disabled.
+	Color string
+}
+
+// DefaultLevelStyles returns the built-in level styles: a single-character
+// label and a color per level (D/I/W/E, and C for dpanic/panic/fatal).
+func DefaultLevelStyles() map[zapcore.Level]LevelStyle {
+	return map[zapcore.Level]LevelStyle{
+		zapcore.DebugLevel:  {Label: "D", Color: colDim},
+		zapcore.InfoLevel:   {Label: "I", Color: colGreen},
+		zapcore.WarnLevel:   {Label: "W", Color: colYellow},
+		zapcore.ErrorLevel:  {Label: "E", Color: colRed},
+		zapcore.DPanicLevel: {Label: "C", Color: colBold + colRed},
+		zapcore.PanicLevel:  {Label: "C", Color: colBold + colRed},
+		zapcore.FatalLevel:  {Label: "C", Color: colBold + colRed},
+	}
+}
+
 // Formatter renders a single zap JSON log line into a human-readable form.
 type Formatter struct {
 	// Color enables ANSI colors in the output.
@@ -58,6 +80,9 @@ type Formatter struct {
 	TimeFormat string
 	// NoTime omits the timestamp from the output entirely.
 	NoTime bool
+	// LevelStyles overrides how levels are rendered. Levels absent from the map
+	// fall back to DefaultLevelStyles; a nil map uses the defaults entirely.
+	LevelStyles map[zapcore.Level]LevelStyle
 
 	levelSet bool
 }
@@ -170,24 +195,20 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 	return b.String(), true
 }
 
-func (f *Formatter) paintLevel(l zapcore.Level) string {
-	label := strings.ToUpper(l.String())
-	// Pad to a fixed width for alignment.
-	label = fmt.Sprintf("%-5s", label)
-	var color string
-	switch {
-	case l <= zapcore.DebugLevel:
-		color = colDim
-	case l == zapcore.InfoLevel:
-		color = colGreen
-	case l == zapcore.WarnLevel:
-		color = colYellow
-	case l == zapcore.ErrorLevel:
-		color = colRed
-	default: // dpanic, panic, fatal
-		color = colBold + colRed
+func (f *Formatter) levelStyle(l zapcore.Level) LevelStyle {
+	if s, ok := f.LevelStyles[l]; ok {
+		return s
 	}
-	return f.paint(color, label)
+	if s, ok := DefaultLevelStyles()[l]; ok {
+		return s
+	}
+	// Unknown level: fall back to its uppercased name without color.
+	return LevelStyle{Label: strings.ToUpper(l.String())}
+}
+
+func (f *Formatter) paintLevel(l zapcore.Level) string {
+	s := f.levelStyle(l)
+	return f.paint(s.Color, s.Label)
 }
 
 func parseLevel(raw json.RawMessage) (zapcore.Level, bool) {

@@ -15,7 +15,7 @@ func TestFormat_Production(t *testing.T) {
 	if !ok {
 		t.Fatal("expected line to be printed")
 	}
-	for _, want := range []string{"INFO", "metrics", "Starting", "attempt=3", "name=svc", "(app/app.go:42)"} {
+	for _, want := range []string{"I ", "metrics", "Starting", "attempt=3", "name=svc", "(app/app.go:42)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output %q missing %q", out, want)
 		}
@@ -29,11 +29,53 @@ func TestFormat_NoTime(t *testing.T) {
 	if !ok {
 		t.Fatal("expected output")
 	}
-	if strings.Contains(out, ":00") || !strings.HasPrefix(out, "INFO") {
+	if strings.Contains(out, ":00") || !strings.HasPrefix(out, "I ") {
 		t.Fatalf("timestamp not omitted: %q", out)
 	}
 	if !strings.Contains(out, "hi") {
 		t.Fatalf("message missing: %q", out)
+	}
+}
+
+func TestFormat_DefaultLevelLabels(t *testing.T) {
+	f := &Formatter{NoTime: true}
+	cases := map[string]string{
+		"debug":  "D",
+		"info":   "I",
+		"warn":   "W",
+		"error":  "E",
+		"dpanic": "C",
+		"panic":  "C",
+		"fatal":  "C",
+	}
+	for lvl, want := range cases {
+		out, ok := f.Format([]byte(`{"level":"` + lvl + `","msg":"m"}`))
+		if !ok {
+			t.Fatalf("%s: expected output", lvl)
+		}
+		// With NoTime the label is the first token.
+		if got, _, _ := strings.Cut(out, " "); got != want {
+			t.Errorf("level %s: label = %q, want %q (out=%q)", lvl, got, want, out)
+		}
+	}
+}
+
+func TestFormat_CustomLevelStyle(t *testing.T) {
+	f := &Formatter{
+		NoTime: true,
+		LevelStyles: map[zapcore.Level]LevelStyle{
+			zapcore.WarnLevel: {Label: "WARN"},
+		},
+	}
+	// Overridden level uses the custom label.
+	out, _ := f.Format([]byte(`{"level":"warn","msg":"m"}`))
+	if !strings.HasPrefix(out, "WARN ") {
+		t.Fatalf("custom warn label not used: %q", out)
+	}
+	// Non-overridden level still uses the single-letter default.
+	out, _ = f.Format([]byte(`{"level":"info","msg":"m"}`))
+	if !strings.HasPrefix(out, "I ") {
+		t.Fatalf("default info label not used: %q", out)
 	}
 }
 
@@ -73,7 +115,7 @@ func TestFormat_StringTimestamp(t *testing.T) {
 	if !ok {
 		t.Fatal("expected output")
 	}
-	if !strings.Contains(out, "WARN") || !strings.Contains(out, "x") {
+	if !strings.Contains(out, "W ") || !strings.Contains(out, "x") {
 		t.Fatalf("unexpected output: %q", out)
 	}
 }
