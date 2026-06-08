@@ -61,7 +61,7 @@ func root() *cobra.Command {
 				return err
 			}
 
-			file, err := os.Open(path)
+			file, err := os.Open(path) // #nosec G304 -- path is a user-supplied log file to read
 			if err != nil {
 				return err
 			}

@@ -14,13 +14,13 @@ import (
 const pollInterval = 200 * time.Millisecond
 
 // Process reads newline-delimited logs from r, formats each line with f and
-// writes the result to w until r is exhausted or ctx is cancelled.
+// writes the result to w until r is exhausted or ctx is canceled.
 func (f *Formatter) Process(ctx context.Context, r io.Reader, w io.Writer) error {
 	sc := bufio.NewScanner(r)
 	// Allow long lines (stacktraces, large payloads): up to 8 MiB.
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	bw := bufio.NewWriter(w)
-	defer bw.Flush()
+	defer func() { _ = bw.Flush() }()
 
 	for sc.Scan() {
 		if err := ctx.Err(); err != nil {
@@ -49,16 +49,16 @@ func (f *Formatter) Process(ctx context.Context, r io.Reader, w io.Writer) error
 
 // Follow tails the file at path (like tail -f), formatting new lines as they
 // are appended. It handles truncation/rotation by reopening when the file
-// shrinks. It blocks until ctx is cancelled.
+// shrinks. It blocks until ctx is canceled.
 func (f *Formatter) Follow(ctx context.Context, path string, w io.Writer) error {
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- path is a user-supplied log file to tail
 	if err != nil {
 		return errors.Wrap(err, "open")
 	}
 	defer func() { _ = file.Close() }()
 
 	bw := bufio.NewWriter(w)
-	defer bw.Flush()
+	defer func() { _ = bw.Flush() }()
 
 	reader := bufio.NewReader(file)
 	var pending []byte
@@ -102,7 +102,7 @@ func (f *Formatter) Follow(ctx context.Context, path string, w io.Writer) error 
 	}
 }
 
-// waitForData blocks until the file has more data, ctx is cancelled, or the
+// waitForData blocks until the file has more data, ctx is canceled, or the
 // file is truncated. It reports whether truncation/rotation was detected.
 func waitForData(ctx context.Context, file *os.File, ticker *time.Ticker) (rotated bool, err error) {
 	// Remember current position to detect truncation.
