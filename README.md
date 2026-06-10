@@ -40,6 +40,7 @@ untouched, so mixed output is safe. Disable colors with `--no-color` or by setti
     --no-color    disable ANSI colors
     --no-time     omit timestamps from the output
     --level       minimum level to display (debug|info|warn|error)
+    --timezone    convert timestamps to this timezone (e.g. UTC, Local, America/New_York)
 ```
 
 ### Level styles

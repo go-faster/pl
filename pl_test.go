@@ -3,6 +3,7 @@ package pl
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap/zapcore"
 )
@@ -155,6 +156,18 @@ func TestFormat_CustomTimeFormat(t *testing.T) {
 	}
 	if !strings.Contains(out, "2021-05-03") {
 		t.Fatalf("custom time format not applied: %q", out)
+	}
+}
+
+func TestFormat_Location(t *testing.T) {
+	// 1620000000 is 2021-05-03 00:00:00 UTC.
+	f := &Formatter{TimeFormat: "2006-01-02 15:04:05", Location: time.UTC}
+	out, ok := f.Format([]byte(`{"level":"info","ts":1620000000,"msg":"m"}`))
+	if !ok {
+		t.Fatal("expected output")
+	}
+	if !strings.Contains(out, "2021-05-03 00:00:00") {
+		t.Fatalf("location not applied: %q", out)
 	}
 }
 

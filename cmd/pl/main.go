@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap/zapcore"
@@ -16,10 +17,11 @@ import (
 
 func root() *cobra.Command {
 	var (
-		follow  bool
-		noColor bool
-		noTime  bool
-		level   string
+		follow   bool
+		noColor  bool
+		noTime   bool
+		level    string
+		timezone string
 	)
 
 	cmd := &cobra.Command{
@@ -34,6 +36,13 @@ func root() *cobra.Command {
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			f := &pl.Formatter{Color: colorEnabled(noColor), NoTime: noTime}
+			if timezone != "" {
+				loc, err := time.LoadLocation(timezone)
+				if err != nil {
+					return fmt.Errorf("invalid --timezone %q: %w", timezone, err)
+				}
+				f.Location = loc
+			}
 			if level != "" {
 				var l zapcore.Level
 				if err := l.UnmarshalText([]byte(level)); err != nil {
@@ -74,6 +83,7 @@ func root() *cobra.Command {
 	cmd.Flags().BoolVar(&noColor, "no-color", false, "disable ANSI colors")
 	cmd.Flags().BoolVar(&noTime, "no-time", false, "omit timestamps from the output")
 	cmd.Flags().StringVar(&level, "level", "", "minimum level to display (debug|info|warn|error)")
+	cmd.Flags().StringVar(&timezone, "timezone", "", "convert timestamps to this timezone (e.g. UTC, Local, America/New_York)")
 
 	return cmd
 }

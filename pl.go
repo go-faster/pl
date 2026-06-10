@@ -80,6 +80,9 @@ type Formatter struct {
 	TimeFormat string
 	// NoTime omits the timestamp from the output entirely.
 	NoTime bool
+	// Location, when set, converts timestamps to this timezone before
+	// formatting. A nil Location uses the timestamp's own location.
+	Location *time.Location
 	// LevelStyles overrides how levels are rendered. Levels absent from the map
 	// fall back to DefaultLevelStyles; a nil map uses the defaults entirely.
 	LevelStyles map[zapcore.Level]LevelStyle
@@ -140,6 +143,9 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 	// Timestamp.
 	if !f.NoTime {
 		if ts, ok := parseTime(m[keyTime]); ok {
+			if f.Location != nil {
+				ts = ts.In(f.Location)
+			}
 			b.WriteString(f.paint(colDim, ts.Format(f.timeFormat())))
 			b.WriteByte(' ')
 		}
