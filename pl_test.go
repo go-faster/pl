@@ -200,7 +200,7 @@ func TestFormat_StacktraceStyles(t *testing.T) {
 	f := &Formatter{Color: true, NoTime: true}
 	line := `{"level":"error","msg":"boom","stacktrace":"main.run\n\t/app/main.go:42"}`
 	out, _ := f.Format([]byte(line))
-	// Function name is blue; the location is dimmed and italicised.
+	// Function name is blue; the location is dimmed and italicized.
 	if !strings.Contains(out, colBlue+"\tmain.run") {
 		t.Fatalf("function name not blue: %q", out)
 	}

@@ -233,7 +233,7 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 // indented "file:line" location — with free-form message text. Each line is
 // classified and styled so the three read apart at a glance:
 //
-//   - source locations are dimmed and italicised (the least important "where");
+//   - source locations are dimmed and italicized (the least important "where");
 //   - function names, which introduce a location, are painted with funcColor;
 //   - everything else is message text, painted with msgColor (the error chain
 //     in errorVerbose).
