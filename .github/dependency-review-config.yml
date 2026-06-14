@@ -6,3 +6,10 @@ allow_licenses:
   - 'BSD-2-Clause'
   - 'BSD-3-Clause'
   - 'Apache-2.0'
+# Transitive dependencies of github.com/go-faster/jx. Both are permissively
+# licensed but trip the license scanner: golang.org/x/sys carries the Go
+# patent grant (flagged as incompatible) and segmentio/asm's MIT license is
+# not detected. Allow them explicitly.
+allow_dependencies_licenses:
+  - 'pkg:golang/golang.org/x/sys'
+  - 'pkg:golang/github.com/segmentio/asm'

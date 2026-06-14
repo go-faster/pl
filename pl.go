@@ -4,34 +4,38 @@ package pl
 
 import (
 	"bytes"
-	"encoding/json"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-faster/jx"
 	"go.uber.org/zap/zapcore"
 )
 
 // Well-known zap field keys (see zap.NewProductionEncoderConfig).
 const (
-	keyTime       = "ts"
-	keyLevel      = "level"
-	keyMessage    = "msg"
-	keyLogger     = "logger"
-	keyCaller     = "caller"
-	keyStacktrace = "stacktrace"
+	keyTime         = "ts"
+	keyLevel        = "level"
+	keyMessage      = "msg"
+	keyLogger       = "logger"
+	keyCaller       = "caller"
+	keyStacktrace   = "stacktrace"
+	keyError        = "error"
+	keyErrorVerbose = "errorVerbose"
 )
 
 // reserved keys are rendered specially and excluded from the extra fields.
 var reserved = map[string]struct{}{
-	keyTime:       {},
-	keyLevel:      {},
-	keyMessage:    {},
-	keyLogger:     {},
-	keyCaller:     {},
-	keyStacktrace: {},
+	keyTime:         {},
+	keyLevel:        {},
+	keyMessage:      {},
+	keyLogger:       {},
+	keyCaller:       {},
+	keyStacktrace:   {},
+	keyError:        {},
+	keyErrorVerbose: {},
 }
 
 // ANSI color codes.
@@ -45,6 +49,7 @@ const (
 	colMagenta = "\033[35m"
 	colCyan    = "\033[36m"
 	colBold    = "\033[1m"
+	colItalic  = "\033[3m"
 )
 
 // LevelStyle controls how a single log level is rendered.
@@ -125,10 +130,18 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		return string(line), true
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	dec.UseNumber()
-	var m map[string]json.RawMessage
-	if err := dec.Decode(&m); err != nil {
+	m := make(map[string]jx.Raw)
+	d := jx.DecodeBytes(trimmed)
+	if err := d.ObjBytes(func(d *jx.Decoder, key []byte) error {
+		// RawAppend copies the value out of the decoder buffer so it stays
+		// valid after the callback returns.
+		raw, err := d.RawAppend(nil)
+		if err != nil {
+			return err
+		}
+		m[string(key)] = raw
+		return nil
+	}); err != nil {
 		// Malformed JSON, pass through.
 		return string(line), true
 	}
@@ -168,6 +181,14 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		b.WriteString(f.paint(colBold, msg))
 	}
 
+	// Error, rendered bare and in red right after the message rather than as a
+	// key=value field. Interior quotes are kept intact (see renderError) so
+	// messages like SQL errors read naturally.
+	if e := m[keyError]; len(e) > 0 {
+		b.WriteByte(' ')
+		b.WriteString(f.paint(colRed, renderError(e)))
+	}
+
 	// Extra fields, sorted for stable output.
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -190,15 +211,77 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		b.WriteString(f.paint(colDim, "("+caller+")"))
 	}
 
-	// Stacktrace on following indented lines.
+	// Verbose error on following indented lines, in a warm palette (red error
+	// text, yellow frames) so it is not confused with the runtime stacktrace.
+	if ev := asString(m[keyErrorVerbose]); ev != "" {
+		f.writeStack(&b, ev, colRed, colYellow)
+	}
+
+	// Stacktrace on following indented lines, in a cool palette (blue frames).
 	if st := asString(m[keyStacktrace]); st != "" {
-		for _, l := range strings.Split(strings.TrimRight(st, "\n"), "\n") {
-			b.WriteByte('\n')
-			b.WriteString(f.paint(colDim, "\t"+l))
-		}
+		f.writeStack(&b, st, colDim, colBlue)
 	}
 
 	return b.String(), true
+}
+
+// writeStack renders a zap stacktrace or go-faster/errors verbose error block
+// onto b, each line indented under the log entry on its own line so the
+// original layout is preserved.
+//
+// Both formats interleave Go stack frames — a function name followed by an
+// indented "file:line" location — with free-form message text. Each line is
+// classified and styled so the three read apart at a glance:
+//
+//   - source locations are dimmed and italicized (the least important "where");
+//   - function names, which introduce a location, are painted with funcColor;
+//   - everything else is message text, painted with msgColor (the error chain
+//     in errorVerbose).
+//
+// The errorVerbose and stacktrace blocks pass different palettes (warm vs cool)
+// so the error chain is not mistaken for the runtime stacktrace.
+func (f *Formatter) writeStack(b *strings.Builder, block, msgColor, funcColor string) {
+	lines := strings.Split(strings.TrimRight(block, "\n"), "\n")
+	for i, l := range lines {
+		b.WriteByte('\n')
+		switch {
+		case isStackLocation(l):
+			b.WriteString(f.paint(colDim+colItalic, "\t"+l))
+		case i+1 < len(lines) && isStackLocation(lines[i+1]):
+			// A function name introducing the following location line.
+			b.WriteString(f.paint(funcColor, "\t"+l))
+		default:
+			b.WriteString(f.paint(msgColor, "\t"+l))
+		}
+	}
+}
+
+// isStackLocation reports whether s is a stack-frame source location, i.e. a
+// "path:line" pair such as "/usr/local/go/src/runtime/proc.go:267", optionally
+// followed by a program-counter offset ("+0x2a"). Leading indentation, used by
+// both zap and go-faster/errors to set locations apart from function names, is
+// ignored.
+func isStackLocation(s string) bool {
+	s = strings.TrimSpace(s)
+	i := strings.LastIndexByte(s, ':')
+	if i <= 0 {
+		return false
+	}
+	path, rest := s[:i], s[i+1:]
+	// Drop an optional " +0x..." offset following the line number.
+	if sp := strings.IndexByte(rest, ' '); sp >= 0 {
+		rest = rest[:sp]
+	}
+	if rest == "" {
+		return false
+	}
+	for _, c := range rest {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	// The part before the line number should look like a file path.
+	return strings.ContainsAny(path, "./")
 }
 
 func (f *Formatter) levelStyle(l zapcore.Level) LevelStyle {
@@ -217,7 +300,7 @@ func (f *Formatter) paintLevel(l zapcore.Level) string {
 	return f.paint(s.Color, s.Label)
 }
 
-func parseLevel(raw json.RawMessage) (zapcore.Level, bool) {
+func parseLevel(raw jx.Raw) (zapcore.Level, bool) {
 	s := asString(raw)
 	if s == "" {
 		return 0, false
@@ -231,12 +314,12 @@ func parseLevel(raw json.RawMessage) (zapcore.Level, bool) {
 
 // parseTime decodes the zap timestamp, which may be an epoch float/int (the
 // production default) or an RFC3339/ISO8601 string.
-func parseTime(raw json.RawMessage) (time.Time, bool) {
+func parseTime(raw jx.Raw) (time.Time, bool) {
 	if len(raw) == 0 {
 		return time.Time{}, false
 	}
 	// String timestamp.
-	if raw[0] == '"' {
+	if raw.Type() == jx.String {
 		s := asString(raw)
 		for _, layout := range []string{
 			time.RFC3339Nano,
@@ -251,7 +334,7 @@ func parseTime(raw json.RawMessage) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	// Numeric epoch (seconds, possibly fractional).
-	num, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+	num, err := jx.DecodeBytes(raw).Float64()
 	if err != nil {
 		return time.Time{}, false
 	}
@@ -261,26 +344,38 @@ func parseTime(raw json.RawMessage) (time.Time, bool) {
 
 // asString returns the string value of raw, unquoting JSON strings. For
 // non-string JSON it returns the raw text.
-func asString(raw json.RawMessage) string {
+func asString(raw jx.Raw) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	if raw[0] == '"' {
-		var s string
-		if err := json.Unmarshal(raw, &s); err == nil {
+	if raw.Type() == jx.String {
+		if s, err := jx.DecodeBytes(raw).Str(); err == nil {
 			return s
 		}
 	}
 	return string(raw)
 }
 
-// renderValue renders an extra field value compactly: strings unquoted,
-// everything else as its JSON text.
-func renderValue(raw json.RawMessage) string {
+// renderError renders an error field value as its bare string, without
+// surrounding or escaping quotes, so messages like SQL errors read naturally
+// (e.g. error=insert: null value in column "attributes" ...).
+func renderError(raw jx.Raw) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	if raw[0] == '"' {
+	if raw.Type() == jx.String {
+		return asString(raw)
+	}
+	return string(raw)
+}
+
+// renderValue renders an extra field value compactly: strings unquoted,
+// everything else as its JSON text.
+func renderValue(raw jx.Raw) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if raw.Type() == jx.String {
 		s := asString(raw)
 		// Quote only when the value contains spaces.
 		if strings.ContainsAny(s, " \t") {

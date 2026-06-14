@@ -137,6 +137,171 @@ func TestFormat_Stacktrace(t *testing.T) {
 	}
 }
 
+func TestFormat_ErrorUnescapesQuotes(t *testing.T) {
+	f := &Formatter{NoTime: true}
+	line := `{"level":"error","msg":"boom","error":"insert: null value in column \"attributes\" violates not-null"}`
+	out, ok := f.Format([]byte(line))
+	if !ok {
+		t.Fatal("expected output")
+	}
+	if !strings.Contains(out, `insert: null value in column "attributes" violates not-null`) {
+		t.Fatalf("error not rendered bare: %q", out)
+	}
+	// Rendered without an explicit "error=" key.
+	if strings.Contains(out, "error=") {
+		t.Fatalf("error should not be a key=value field: %q", out)
+	}
+	if strings.Contains(out, `\"`) {
+		t.Fatalf("error still contains escaped quotes: %q", out)
+	}
+}
+
+func TestFormat_ErrorVerboseMultiline(t *testing.T) {
+	f := &Formatter{NoTime: true}
+	line := `{"level":"error","msg":"boom","errorVerbose":"insert:\n    pkg.SaveFile\n  - null value"}`
+	out, ok := f.Format([]byte(line))
+	if !ok {
+		t.Fatal("expected output")
+	}
+	// Rendered across indented lines, not inline as an escaped value.
+	for _, want := range []string{"\n\tinsert:", "\n\t    pkg.SaveFile", "\n\t  - null value"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("errorVerbose line %q missing: %q", want, out)
+		}
+	}
+	if strings.Contains(out, `errorVerbose=`) {
+		t.Fatalf("errorVerbose should not be an inline field: %q", out)
+	}
+}
+
+func TestFormat_StacktraceFrames(t *testing.T) {
+	f := &Formatter{NoTime: true}
+	// The field value carries JSON-escaped newlines and tabs, as zap emits.
+	line := `{"level":"error","msg":"boom","stacktrace":` +
+		`"main.run\n\t/app/main.go:42\nruntime.main\n\t/usr/local/go/src/runtime/proc.go:267"}`
+	out, ok := f.Format([]byte(line))
+	if !ok {
+		t.Fatal("expected output")
+	}
+	// The original two-line layout (function then indented location) is kept.
+	for _, want := range []string{
+		"\tmain.run",
+		"\t\t/app/main.go:42",
+		"\truntime.main",
+		"\t\t/usr/local/go/src/runtime/proc.go:267",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("line %q missing from %q", want, out)
+		}
+	}
+}
+
+func TestFormat_StacktraceStyles(t *testing.T) {
+	f := &Formatter{Color: true, NoTime: true}
+	line := `{"level":"error","msg":"boom","stacktrace":"main.run\n\t/app/main.go:42"}`
+	out, _ := f.Format([]byte(line))
+	// Function name is blue; the location is dimmed and italicized.
+	if !strings.Contains(out, colBlue+"\tmain.run") {
+		t.Fatalf("function name not blue: %q", out)
+	}
+	if !strings.Contains(out, colDim+colItalic+"\t\t/app/main.go:42") {
+		t.Fatalf("location not dim+italic: %q", out)
+	}
+}
+
+func TestFormat_ErrorVerboseFrames(t *testing.T) {
+	f := &Formatter{NoTime: true}
+	line := `{"level":"error","msg":"boom","errorVerbose":` +
+		`"insert: bad value\n    pkg.SaveFile\n\t/app/pkg/save.go:12\n  - root cause"}`
+	out, ok := f.Format([]byte(line))
+	if !ok {
+		t.Fatal("expected output")
+	}
+	// Every line keeps its original indentation, none are merged.
+	for _, want := range []string{
+		"\tinsert: bad value",
+		"\t    pkg.SaveFile",
+		"\t\t/app/pkg/save.go:12",
+		"\t  - root cause",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("line %q missing from %q", want, out)
+		}
+	}
+}
+
+func TestFormat_ErrorVerboseWarmPalette(t *testing.T) {
+	f := &Formatter{Color: true, NoTime: true}
+	line := `{"level":"error","msg":"boom","errorVerbose":` +
+		`"bad value\n    pkg.SaveFile\n\t/app/pkg/save.go:12"}`
+	out, _ := f.Format([]byte(line))
+	// Error text is red and frames are yellow, distinct from the blue/dim
+	// runtime stacktrace, so the two blocks are not confused.
+	if !strings.Contains(out, colRed+"\tbad value") {
+		t.Fatalf("error text not red: %q", out)
+	}
+	if !strings.Contains(out, colYellow+"\t    pkg.SaveFile") {
+		t.Fatalf("errorVerbose function not yellow: %q", out)
+	}
+	if strings.Contains(out, colBlue) {
+		t.Fatalf("errorVerbose should not use the stacktrace's blue: %q", out)
+	}
+}
+
+func TestIsStackLocation(t *testing.T) {
+	yes := []string{
+		"/usr/local/go/src/runtime/proc.go:267",
+		"\t/app/main.go:42",
+		"        /app/pkg/save.go:12 +0x2a",
+		"main.go:1",
+	}
+	for _, s := range yes {
+		if !isStackLocation(s) {
+			t.Errorf("expected %q to be a location", s)
+		}
+	}
+	no := []string{
+		"",
+		"main.run",
+		"github.com/foo/bar.(*T).Method",
+		"insert: bad value",
+		"  - root cause",
+		":42",
+	}
+	for _, s := range no {
+		if isStackLocation(s) {
+			t.Errorf("expected %q not to be a location", s)
+		}
+	}
+}
+
+func TestFormat_ErrorVerboseDistinctColor(t *testing.T) {
+	f := &Formatter{Color: true, NoTime: true}
+	line := `{"level":"error","msg":"boom","errorVerbose":"e1\ne2","stacktrace":"s1\ns2"}`
+	out, _ := f.Format([]byte(line))
+	if !strings.Contains(out, colRed+"\te1") {
+		t.Fatalf("errorVerbose not painted in its own color: %q", out)
+	}
+	if !strings.Contains(out, colDim+"\ts1") {
+		t.Fatalf("stacktrace color changed: %q", out)
+	}
+}
+
+func TestRenderError(t *testing.T) {
+	if renderError(nil) != "" {
+		t.Error("empty raw should render empty")
+	}
+	if got := renderError([]byte(`123`)); got != "123" {
+		t.Errorf("numeric value: %q", got)
+	}
+	if got := renderError([]byte(`"plain"`)); got != "plain" {
+		t.Errorf("plain string should be unquoted: %q", got)
+	}
+	if got := renderError([]byte(`"a \"b\" c"`)); got != `a "b" c` {
+		t.Errorf("error should be bare with interior quotes intact: %q", got)
+	}
+}
+
 func TestFormat_Color(t *testing.T) {
 	f := &Formatter{Color: true, NoTime: true}
 	out, ok := f.Format([]byte(`{"level":"info","logger":"svc","msg":"hi","k":"v"}`))
