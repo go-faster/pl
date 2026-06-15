@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,32 @@ func TestProcess_ScanError(t *testing.T) {
 type iotest struct{}
 
 func (iotest) Read([]byte) (int, error) { return 0, errors.New("fake read error") }
+
+func TestProcess_UnblocksOnCancel(t *testing.T) {
+	// A reader that blocks forever, like an idle terminal on stdin.
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	f := &Formatter{NoTime: true}
+	done := make(chan error, 1)
+	go func() {
+		done <- f.Process(ctx, pr, &bytes.Buffer{})
+	}()
+
+	// Simulate Ctrl+C while the read is blocked.
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected context error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Process did not return after cancellation")
+	}
+}
 
 func TestFollow_TailsAppendedLines(t *testing.T) {
 	dir := t.TempDir()

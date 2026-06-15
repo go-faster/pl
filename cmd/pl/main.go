@@ -58,7 +58,11 @@ func root() *cobra.Command {
 				if follow {
 					return fmt.Errorf("--follow requires a file argument")
 				}
-				return f.Process(ctx, os.Stdin, os.Stdout)
+				err := f.Process(ctx, os.Stdin, os.Stdout)
+				if ctx.Err() != nil {
+					return nil // interrupted, clean exit
+				}
+				return err
 			}
 
 			path := args[0]
@@ -75,7 +79,11 @@ func root() *cobra.Command {
 				return err
 			}
 			defer func() { _ = file.Close() }()
-			return f.Process(ctx, file, os.Stdout)
+			err = f.Process(ctx, file, os.Stdout)
+			if ctx.Err() != nil {
+				return nil // interrupted, clean exit
+			}
+			return err
 		},
 	}
 

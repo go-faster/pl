@@ -22,29 +22,54 @@ func (f *Formatter) Process(ctx context.Context, r io.Reader, w io.Writer) error
 	bw := bufio.NewWriter(w)
 	defer func() { _ = bw.Flush() }()
 
-	for sc.Scan() {
+	// Scan in a goroutine so a blocking read (e.g. an idle terminal on stdin)
+	// does not prevent us from reacting to ctx cancellation. The goroutine may
+	// stay parked on the read after we return; that is fine because the process
+	// is exiting.
+	lines := make(chan []byte)
+	scanDone := make(chan error, 1)
+	go func() {
+		for sc.Scan() {
+			// Copy: the scanner reuses its buffer on the next Scan.
+			line := append([]byte(nil), sc.Bytes()...)
+			select {
+			case lines <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+		scanDone <- sc.Err()
+	}()
+
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		out, ok := f.Format(sc.Bytes())
-		if !ok {
-			continue
-		}
-		if _, err := bw.WriteString(out); err != nil {
-			return errors.Wrap(err, "write")
-		}
-		if err := bw.WriteByte('\n'); err != nil {
-			return errors.Wrap(err, "write")
-		}
-		// Flush eagerly so piped output appears promptly.
-		if err := bw.Flush(); err != nil {
-			return errors.Wrap(err, "flush")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-scanDone:
+			if err != nil {
+				return errors.Wrap(err, "scan")
+			}
+			return nil
+		case line := <-lines:
+			out, ok := f.Format(line)
+			if !ok {
+				continue
+			}
+			if _, err := bw.WriteString(out); err != nil {
+				return errors.Wrap(err, "write")
+			}
+			if err := bw.WriteByte('\n'); err != nil {
+				return errors.Wrap(err, "write")
+			}
+			// Flush eagerly so piped output appears promptly.
+			if err := bw.Flush(); err != nil {
+				return errors.Wrap(err, "flush")
+			}
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return errors.Wrap(err, "scan")
-	}
-	return nil
 }
 
 // Follow tails the file at path (like tail -f), formatting new lines as they
