@@ -3,6 +3,19 @@
 `pl` tails and pretty-prints JSONL logs produced by [zap](https://github.com/uber-go/zap)
 (the `zap.NewProductionConfig` JSON encoder, as used by [go-faster/sdk](https://github.com/go-faster/sdk)).
 
+It also understands [OpenTelemetry](https://opentelemetry.io) log records in the
+[logs data model](https://opentelemetry.io/docs/specs/otel/logs/data-model/) JSON
+form (the `Severity`/`Body`/`Attributes`/`Scope` shape emitted by go-faster/sdk's
+console log exporter). Both formats are detected per line and rendered the same
+way, so a stream that mixes them — as oteldb emits — reads uniformly:
+
+- `Body` becomes the message, the instrumentation `Scope` name the logger;
+- `SeverityText` (or the numeric `SeverityNumber`) becomes the level;
+- `Attributes` become `key=value` fields, with the `code.*` ones folded into the
+  caller and `exception.message`/`exception.stacktrace` shown as the error;
+- non-zero `TraceID`/`SpanID` are surfaced as `trace_id`/`span_id` for
+  correlation, while resource attributes and zero ids are omitted as noise.
+
 ## Install
 
 ```bash
@@ -36,11 +49,24 @@ untouched, so mixed output is safe. Disable colors with `--no-color` or by setti
 ### Flags
 
 ```
--f, --follow      follow the file, waiting for new lines (like tail -f)
-    --no-color    disable ANSI colors
-    --no-time     omit timestamps from the output
-    --level       minimum level to display (debug|info|warn|error)
-    --timezone    convert timestamps to this timezone (e.g. UTC, Local, America/New_York)
+-f, --follow         follow the file, waiting for new lines (like tail -f)
+    --no-color       disable ANSI colors
+    --no-time        omit timestamps from the output
+    --level          minimum level to display (debug|info|warn|error)
+    --timezone       convert timestamps to this timezone (e.g. UTC, Local, America/New_York)
+    --otel-resource  include OpenTelemetry resource attributes (OTEL logs only)
+    --otel-func      include the function name in the caller (OTEL logs only)
+```
+
+`--otel-resource` prints the resource attributes on their own indented lines
+below the entry, in a color distinct from the inline fields, so they stay
+readable instead of crowding the message:
+
+```
+20:02:07.563 I app ClickHouse disabled (oteldb/app.go:114)
+	host.name=198f0b5f008f
+	service.name=oteldb
+	telemetry.sdk.version=1.44.0
 ```
 
 ### Level styles

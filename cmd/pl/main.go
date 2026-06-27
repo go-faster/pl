@@ -17,11 +17,13 @@ import (
 
 func root() *cobra.Command {
 	var (
-		follow   bool
-		noColor  bool
-		noTime   bool
-		level    string
-		timezone string
+		follow       bool
+		noColor      bool
+		noTime       bool
+		level        string
+		timezone     string
+		otelResource bool
+		otelFunc     bool
 	)
 
 	cmd := &cobra.Command{
@@ -35,7 +37,12 @@ func root() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			f := &pl.Formatter{Color: colorEnabled(noColor), NoTime: noTime}
+			f := &pl.Formatter{
+				Color:        colorEnabled(noColor),
+				NoTime:       noTime,
+				OTELResource: otelResource,
+				OTELFunc:     otelFunc,
+			}
 			if timezone != "" {
 				loc, err := time.LoadLocation(timezone)
 				if err != nil {
@@ -92,6 +99,8 @@ func root() *cobra.Command {
 	cmd.Flags().BoolVar(&noTime, "no-time", false, "omit timestamps from the output")
 	cmd.Flags().StringVar(&level, "level", "", "minimum level to display (debug|info|warn|error)")
 	cmd.Flags().StringVar(&timezone, "timezone", "", "convert timestamps to this timezone (e.g. UTC, Local, America/New_York)")
+	cmd.Flags().BoolVar(&otelResource, "otel-resource", false, "include OpenTelemetry resource attributes as fields (OTEL logs only)")
+	cmd.Flags().BoolVar(&otelFunc, "otel-func", false, "include the function name in the caller (OTEL logs only)")
 
 	return cmd
 }

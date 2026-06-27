@@ -1,5 +1,8 @@
 // Package pl tails and pretty-prints JSONL logs produced by zap
-// (the zap.NewProductionConfig JSON encoder used by go-faster/sdk).
+// (the zap.NewProductionConfig JSON encoder used by go-faster/sdk) as well as
+// OpenTelemetry log records in the logs data model JSON form. Each line is
+// detected and normalized onto a shared rendering path, so a stream mixing the
+// two formats reads uniformly.
 package pl
 
 import (
@@ -36,6 +39,7 @@ var reserved = map[string]struct{}{
 	keyStacktrace:   {},
 	keyError:        {},
 	keyErrorVerbose: {},
+	keyResource:     {},
 }
 
 // ANSI color codes.
@@ -91,6 +95,14 @@ type Formatter struct {
 	// LevelStyles overrides how levels are rendered. Levels absent from the map
 	// fall back to DefaultLevelStyles; a nil map uses the defaults entirely.
 	LevelStyles map[zapcore.Level]LevelStyle
+	// OTELResource includes OpenTelemetry resource attributes (service.name,
+	// host.name, ...) as fields. They are dropped by default because they repeat
+	// identically on every line. Only affects OTEL log records.
+	OTELResource bool
+	// OTELFunc includes the function name (the code.function.name attribute) in
+	// the caller of OpenTelemetry log records. Dropped by default as it
+	// duplicates the source location.
+	OTELFunc bool
 
 	levelSet bool
 }
@@ -144,6 +156,12 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 	}); err != nil {
 		// Malformed JSON, pass through.
 		return string(line), true
+	}
+
+	// OpenTelemetry log records use a different (capitalized) field layout;
+	// normalize them onto zap's keys so the rest of the formatter is shared.
+	if om, ok := f.normalizeOTEL(m); ok {
+		m = om
 	}
 
 	lvl, lvlOK := parseLevel(m[keyLevel])
@@ -209,6 +227,12 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 	if caller := asString(m[keyCaller]); caller != "" {
 		b.WriteByte(' ')
 		b.WriteString(f.paint(colDim, "("+caller+")"))
+	}
+
+	// OpenTelemetry resource attributes, when enabled, on their own indented
+	// lines in a distinct color so they read apart from the inline fields.
+	if res := m[keyResource]; len(res) > 0 {
+		f.writeResource(&b, res)
 	}
 
 	// Verbose error on following indented lines, in a warm palette (red error
