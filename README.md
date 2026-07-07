@@ -16,6 +16,12 @@ way, so a stream that mixes them — as oteldb emits — reads uniformly:
 - non-zero `TraceID`/`SpanID` are surfaced as `trace_id`/`span_id` for
   correlation, while resource attributes and zero ids are omitted as noise.
 
+When go-faster/sdk's `zctx` runs in otelzap mode (`zctx.WithOpenTelemetryZap`),
+zap lines carry the trace correlation as a reflected `ctx` object rather than
+flat fields. `pl` flattens that object so `span_id`/`trace_id` (and any other
+context-scoped members) read as ordinary fields — identical to zctx's default
+mode — again dropping all-zero ids.
+
 ## Install
 
 ```bash

@@ -310,6 +310,47 @@ func (f *Formatter) writeResource(b *strings.Builder, raw jx.Raw) {
 	}
 }
 
+// liftZapCtx flattens a zap "ctx" object field, produced by go-faster/sdk's
+// zctx in otelzap mode (zctx.WithOpenTelemetryZap logs zap.Reflect("ctx", ctx)),
+// onto the top-level map so its members — notably span_id and trace_id — render
+// as ordinary fields rather than a nested JSON blob. This mirrors the OTEL path,
+// so a stream mixing zctx's two modes reads uniformly. All-zero trace/span ids
+// are dropped as noise; members that would shadow an existing top-level or
+// reserved key are left in place. The ctx field is removed once flattened.
+func liftZapCtx(m map[string]jx.Raw) {
+	raw := m[keyCtx]
+	if len(raw) == 0 || raw.Type() != jx.Object {
+		return
+	}
+	inner := make(map[string]jx.Raw)
+	if err := jx.DecodeBytes(raw).ObjBytes(func(d *jx.Decoder, key []byte) error {
+		v, err := d.RawAppend(nil)
+		if err != nil {
+			return err
+		}
+		inner[string(key)] = v
+		return nil
+	}); err != nil {
+		// Not a flat object we can read; leave ctx as-is to be shown verbatim.
+		return
+	}
+	for k, v := range inner {
+		if k == keySpanID || k == keyTraceID {
+			if isZeroHex(asString(v)) {
+				continue
+			}
+		}
+		if _, ok := reserved[k]; ok {
+			continue
+		}
+		if _, ok := m[k]; ok {
+			continue
+		}
+		m[k] = v
+	}
+	delete(m, keyCtx)
+}
+
 // isZeroHex reports whether s is empty or consists solely of '0', i.e. an
 // all-zero trace or span id that carries no correlation information.
 func isZeroHex(s string) bool {

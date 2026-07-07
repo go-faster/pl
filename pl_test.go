@@ -121,6 +121,51 @@ func TestFormat_StringTimestamp(t *testing.T) {
 	}
 }
 
+func TestFormat_ZapCtxTraceCorrelation(t *testing.T) {
+	// go-faster/sdk zctx in otelzap mode (WithOpenTelemetryZap) logs the trace
+	// correlation as a reflected "ctx" object instead of flat fields.
+	line := `{"level":"info","ts":1783406586.28,"caller":"handler/auth.go:109","msg":"OAuth callback successful","ctx":{"span_id":"3a05ce2286adaea3","trace_id":"a30d8906e0e519424360816608e11188"},"session_id":"c8e67dcb-423a-405c-881d-33d2ddc3d9fa","user_id":25}`
+	f := &Formatter{NoTime: true}
+	out, ok := f.Format([]byte(line))
+	if !ok {
+		t.Fatal("expected output")
+	}
+	for _, want := range []string{
+		"span_id=3a05ce2286adaea3",
+		"trace_id=a30d8906e0e519424360816608e11188",
+		"session_id=c8e67dcb-423a-405c-881d-33d2ddc3d9fa",
+		"user_id=25",
+		"(handler/auth.go:109)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q missing %q", out, want)
+		}
+	}
+	// The reflected ctx object must not leak through as a raw JSON blob.
+	if strings.Contains(out, "ctx=") {
+		t.Errorf("ctx field not flattened: %q", out)
+	}
+}
+
+func TestFormat_ZapCtxDropsZeroIDsAndKeepsExtras(t *testing.T) {
+	// All-zero ids carry no correlation and are dropped; other ctx members are
+	// still surfaced, and a non-object ctx is left untouched.
+	f := &Formatter{NoTime: true}
+
+	out, _ := f.Format([]byte(`{"level":"info","ts":1,"msg":"m","ctx":{"span_id":"0000000000000000","trace_id":"00000000000000000000000000000000","tenant":"acme"}}`))
+	if strings.Contains(out, "span_id") || strings.Contains(out, "trace_id") {
+		t.Errorf("all-zero ids not dropped: %q", out)
+	}
+	if !strings.Contains(out, "tenant=acme") {
+		t.Errorf("non-id ctx member dropped: %q", out)
+	}
+
+	out, _ = f.Format([]byte(`{"level":"info","ts":1,"msg":"m","ctx":"plain string"}`))
+	if !strings.Contains(out, `ctx="plain string"`) {
+		t.Errorf("non-object ctx not preserved: %q", out)
+	}
+}
+
 func TestFormat_QuotesValuesWithSpaces(t *testing.T) {
 	f := &Formatter{}
 	out, _ := f.Format([]byte(`{"msg":"m","note":"has space"}`))

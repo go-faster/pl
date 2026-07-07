@@ -27,6 +27,11 @@ const (
 	keyStacktrace   = "stacktrace"
 	keyError        = "error"
 	keyErrorVerbose = "errorVerbose"
+	// keyCtx is where go-faster/sdk's zctx logs a reflected context in otelzap
+	// mode (see zctx.WithOpenTelemetryZap). It carries trace correlation
+	// (span_id, trace_id) and any context-scoped fields as a nested object;
+	// liftZapCtx flattens it so those read like ordinary fields.
+	keyCtx = "ctx"
 )
 
 // reserved keys are rendered specially and excluded from the extra fields.
@@ -162,6 +167,10 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 	// normalize them onto zap's keys so the rest of the formatter is shared.
 	if om, ok := f.normalizeOTEL(m); ok {
 		m = om
+	} else {
+		// A zap line: flatten zctx's reflected "ctx" object (otelzap mode) so
+		// span_id/trace_id surface as ordinary fields instead of a JSON blob.
+		liftZapCtx(m)
 	}
 
 	lvl, lvlOK := parseLevel(m[keyLevel])
