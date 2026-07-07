@@ -121,6 +121,40 @@ func TestFormat_StringTimestamp(t *testing.T) {
 	}
 }
 
+func TestFormat_TraceIDFilter(t *testing.T) {
+	const want = "a30d8906e0e519424360816608e11188"
+	// Uppercase to prove the comparison is case-insensitive.
+	f := &Formatter{TraceID: strings.ToUpper(want)}
+
+	cases := []struct {
+		name string
+		line string
+		keep bool
+	}{
+		{"flat zap trace_id", `{"level":"info","msg":"m","trace_id":"` + want + `"}`, true},
+		{"zctx otelzap ctx", `{"level":"info","msg":"m","ctx":{"span_id":"aa","trace_id":"` + want + `"}}`, true},
+		{"otel record", `{"Severity":9,"Body":{"Type":"String","Value":"m"},"Attributes":[],"TraceID":"` + want + `","Scope":{"Name":"s"}}`, true},
+		{"different trace", `{"level":"info","msg":"m","trace_id":"ffffffffffffffffffffffffffffffff"}`, false},
+		{"no trace", `{"level":"info","msg":"m"}`, false},
+		{"non-json passthrough", `plain text line`, false},
+		{"malformed json", `{"level":"info"`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, ok := f.Format([]byte(c.line))
+			if ok != c.keep {
+				t.Errorf("Format kept=%v, want %v for %q", ok, c.keep, c.line)
+			}
+		})
+	}
+
+	// With no filter set, the same non-matching lines are still shown.
+	none := &Formatter{}
+	if _, ok := none.Format([]byte(`plain text line`)); !ok {
+		t.Error("passthrough line should be kept when no trace filter is set")
+	}
+}
+
 func TestFormat_ZapCtxTraceCorrelation(t *testing.T) {
 	// go-faster/sdk zctx in otelzap mode (WithOpenTelemetryZap) logs the trace
 	// correlation as a reflected "ctx" object instead of flat fields.

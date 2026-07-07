@@ -90,6 +90,12 @@ type Formatter struct {
 	Color bool
 	// MinLevel, when set, drops lines below this level.
 	MinLevel zapcore.Level
+	// TraceID, when set, drops every line whose trace_id does not match,
+	// isolating a single trace across a stream. The comparison is
+	// case-insensitive and matches whether the id came from a zap trace_id
+	// field, zctx's reflected ctx object, or an OTEL TraceID. Lines that carry
+	// no trace_id — including non-JSON passthrough lines — are dropped.
+	TraceID string
 	// TimeFormat is the layout for the timestamp. Defaults to "15:04:05.000".
 	TimeFormat string
 	// NoTime omits the timestamp from the output entirely.
@@ -143,7 +149,11 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		return "", false
 	}
 	if trimmed[0] != '{' {
-		// Not a JSON object, pass through.
+		// Not a JSON object, pass through — unless a trace filter is active, in
+		// which case a line with no trace_id cannot match.
+		if f.TraceID != "" {
+			return "", false
+		}
 		return string(line), true
 	}
 
@@ -159,7 +169,11 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		m[string(key)] = raw
 		return nil
 	}); err != nil {
-		// Malformed JSON, pass through.
+		// Malformed JSON, pass through — unless a trace filter is active (see
+		// the non-object case above).
+		if f.TraceID != "" {
+			return "", false
+		}
 		return string(line), true
 	}
 
@@ -171,6 +185,10 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		// A zap line: flatten zctx's reflected "ctx" object (otelzap mode) so
 		// span_id/trace_id surface as ordinary fields instead of a JSON blob.
 		liftZapCtx(m)
+	}
+
+	if f.TraceID != "" && !strings.EqualFold(asString(m[keyTraceID]), f.TraceID) {
+		return "", false
 	}
 
 	lvl, lvlOK := parseLevel(m[keyLevel])

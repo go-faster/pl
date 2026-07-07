@@ -91,6 +91,21 @@ func TestRoot_ValidLevel(t *testing.T) {
 	}
 }
 
+func TestRoot_TraceIDFilter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "log.jsonl")
+	lines := `{"level":"info","msg":"keep","trace_id":"abc123"}` + "\n" +
+		`{"level":"info","msg":"drop","trace_id":"def456"}` + "\n"
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := root()
+	cmd.SetArgs([]string{"--trace-id", "ABC123", "--no-color", "--no-time", path})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+}
+
 func TestRoot_FollowCanceled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "log.jsonl")
