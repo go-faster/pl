@@ -121,6 +121,85 @@ func TestFormat_StringTimestamp(t *testing.T) {
 	}
 }
 
+func TestFormat_TraceIDFilter(t *testing.T) {
+	const want = "a30d8906e0e519424360816608e11188"
+	// Uppercase to prove the comparison is case-insensitive.
+	f := &Formatter{TraceID: strings.ToUpper(want)}
+
+	cases := []struct {
+		name string
+		line string
+		keep bool
+	}{
+		{"flat zap trace_id", `{"level":"info","msg":"m","trace_id":"` + want + `"}`, true},
+		{"zctx otelzap ctx", `{"level":"info","msg":"m","ctx":{"span_id":"aa","trace_id":"` + want + `"}}`, true},
+		{"otel record", `{"Severity":9,"Body":{"Type":"String","Value":"m"},"Attributes":[],"TraceID":"` + want + `","Scope":{"Name":"s"}}`, true},
+		{"different trace", `{"level":"info","msg":"m","trace_id":"ffffffffffffffffffffffffffffffff"}`, false},
+		{"no trace", `{"level":"info","msg":"m"}`, false},
+		{"non-json passthrough", `plain text line`, false},
+		{"malformed json", `{"level":"info"`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, ok := f.Format([]byte(c.line))
+			if ok != c.keep {
+				t.Errorf("Format kept=%v, want %v for %q", ok, c.keep, c.line)
+			}
+		})
+	}
+
+	// With no filter set, the same non-matching lines are still shown.
+	none := &Formatter{}
+	if _, ok := none.Format([]byte(`plain text line`)); !ok {
+		t.Error("passthrough line should be kept when no trace filter is set")
+	}
+}
+
+func TestFormat_ZapCtxTraceCorrelation(t *testing.T) {
+	// go-faster/sdk zctx in otelzap mode (WithOpenTelemetryZap) logs the trace
+	// correlation as a reflected "ctx" object instead of flat fields.
+	line := `{"level":"info","ts":1783406586.28,"caller":"handler/auth.go:109","msg":"OAuth callback successful","ctx":{"span_id":"3a05ce2286adaea3","trace_id":"a30d8906e0e519424360816608e11188"},"session_id":"c8e67dcb-423a-405c-881d-33d2ddc3d9fa","user_id":25}`
+	f := &Formatter{NoTime: true}
+	out, ok := f.Format([]byte(line))
+	if !ok {
+		t.Fatal("expected output")
+	}
+	for _, want := range []string{
+		"span_id=3a05ce2286adaea3",
+		"trace_id=a30d8906e0e519424360816608e11188",
+		"session_id=c8e67dcb-423a-405c-881d-33d2ddc3d9fa",
+		"user_id=25",
+		"(handler/auth.go:109)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q missing %q", out, want)
+		}
+	}
+	// The reflected ctx object must not leak through as a raw JSON blob.
+	if strings.Contains(out, "ctx=") {
+		t.Errorf("ctx field not flattened: %q", out)
+	}
+}
+
+func TestFormat_ZapCtxDropsZeroIDsAndKeepsExtras(t *testing.T) {
+	// All-zero ids carry no correlation and are dropped; other ctx members are
+	// still surfaced, and a non-object ctx is left untouched.
+	f := &Formatter{NoTime: true}
+
+	out, _ := f.Format([]byte(`{"level":"info","ts":1,"msg":"m","ctx":{"span_id":"0000000000000000","trace_id":"00000000000000000000000000000000","tenant":"acme"}}`))
+	if strings.Contains(out, "span_id") || strings.Contains(out, "trace_id") {
+		t.Errorf("all-zero ids not dropped: %q", out)
+	}
+	if !strings.Contains(out, "tenant=acme") {
+		t.Errorf("non-id ctx member dropped: %q", out)
+	}
+
+	out, _ = f.Format([]byte(`{"level":"info","ts":1,"msg":"m","ctx":"plain string"}`))
+	if !strings.Contains(out, `ctx="plain string"`) {
+		t.Errorf("non-object ctx not preserved: %q", out)
+	}
+}
+
 func TestFormat_QuotesValuesWithSpaces(t *testing.T) {
 	f := &Formatter{}
 	out, _ := f.Format([]byte(`{"msg":"m","note":"has space"}`))

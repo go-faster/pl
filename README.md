@@ -16,6 +16,12 @@ way, so a stream that mixes them — as oteldb emits — reads uniformly:
 - non-zero `TraceID`/`SpanID` are surfaced as `trace_id`/`span_id` for
   correlation, while resource attributes and zero ids are omitted as noise.
 
+When go-faster/sdk's `zctx` runs in otelzap mode (`zctx.WithOpenTelemetryZap`),
+zap lines carry the trace correlation as a reflected `ctx` object rather than
+flat fields. `pl` flattens that object so `span_id`/`trace_id` (and any other
+context-scoped members) read as ordinary fields — identical to zctx's default
+mode — again dropping all-zero ids.
+
 ## Install
 
 ```bash
@@ -46,6 +52,14 @@ Output is colorized when stdout is a terminal. Non-JSON lines are passed through
 untouched, so mixed output is safe. Disable colors with `--no-color` or by setting
 `NO_COLOR`.
 
+Isolate a single trace with `--trace-id`; it keeps only lines whose `trace_id`
+matches (case-insensitively), whichever format they arrive in — a flat zap
+`trace_id`, zctx's reflected `ctx` object, or an OTEL `TraceID`:
+
+```bash
+pl --trace-id a30d8906e0e519424360816608e11188 service.log
+```
+
 ### Flags
 
 ```
@@ -53,6 +67,7 @@ untouched, so mixed output is safe. Disable colors with `--no-color` or by setti
     --no-color       disable ANSI colors
     --no-time        omit timestamps from the output
     --level          minimum level to display (debug|info|warn|error)
+    --trace-id       show only lines whose trace_id matches (case-insensitive)
     --timezone       convert timestamps to this timezone (e.g. UTC, Local, America/New_York)
     --otel-resource  include OpenTelemetry resource attributes (OTEL logs only)
     --otel-func      include the function name in the caller (OTEL logs only)
