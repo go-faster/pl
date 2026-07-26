@@ -48,9 +48,35 @@ Read a file once and exit:
 pl service.log
 ```
 
-Output is colorized when stdout is a terminal. Non-JSON lines are passed through
-untouched, so mixed output is safe. Disable colors with `--no-color` or by setting
-`NO_COLOR`.
+Output is colorized when stdout is a terminal. Lines in none of the formats below
+are passed through untouched, so mixed output is safe. Disable colors with
+`--no-color` or by setting `NO_COLOR`.
+
+## Plain-text formats
+
+Besides the two JSON formats, `pl` renders the plain-text logs that surround a
+Kubernetes deployment, so `kubectl logs` output reads like the rest:
+
+- **logfmt** (logrus, Grafana, Loki, `log15`, …) — `level`/`lvl`/`severity`,
+  `t`/`ts`/`time`/`timestamp`, `msg`/`message`, `logger`, `caller`, `err`/`error`
+  and the trace id keys map onto the same rendering as zap's; every other pair
+  becomes a `key=value` field, with numbers and booleans kept as such. A line is
+  only treated as logfmt when it carries at least two of level, timestamp and
+  message — plain prose is passed through rather than mangled into fields.
+- **klog** (kube-apiserver, kubelet, and everything else built on
+  [`k8s.io/klog`](https://github.com/kubernetes/klog)) — the header supplies the
+  level, timestamp, `thread.id` and caller; structured klog's quoted message and
+  trailing `key="value"` pairs are parsed like logfmt, so `err=` shows up as the
+  error. The year, which klog omits, is taken from the current date.
+
+```console
+$ kubectl logs kubelet | pl
+01:22:17.141 E Startup probe already exists for container containerName=cilium-envoy pod=kube-system/cilium-envoy-vxgzg thread.id=1386 (prober_manager.go:197)
+```
+
+Timestamps in these formats are parsed from RFC3339 or from a numeric epoch,
+whose unit (seconds, milliseconds, microseconds or nanoseconds) is deduced from
+its magnitude.
 
 Isolate a single trace with `--trace-id`; it keeps only lines whose `trace_id`
 matches (case-insensitively), whichever format they arrive in — a flat zap

@@ -30,8 +30,9 @@ func root() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pl [file]",
 		Short: "Tail and pretty-print zap JSONL logs",
-		Long: "pl reads JSONL logs produced by zap (go-faster/sdk) and renders them\n" +
-			"in a human-readable, colorized form.\n\n" +
+		Long: "pl reads JSONL logs produced by zap (go-faster/sdk), OpenTelemetry log\n" +
+			"records, and plain-text logfmt and klog lines, rendering them in a\n" +
+			"human-readable, colorized form.\n\n" +
 			"With no argument it reads from stdin. With a file argument it reads the\n" +
 			"file; pass --follow to keep watching for new lines (like tail -f).",
 		Args:          cobra.MaximumNArgs(1),
