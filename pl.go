@@ -45,6 +45,7 @@ var reserved = map[string]struct{}{
 	keyError:        {},
 	keyErrorVerbose: {},
 	keyResource:     {},
+	keyPrefix:       {},
 }
 
 // defaultTimeFormat is the layout used when Formatter.TimeFormat is unset.
@@ -194,9 +195,40 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		// A zap line: flatten zctx's reflected "ctx" object (otelzap mode) so
 		// span_id/trace_id surface as ordinary fields instead of a JSON blob.
 		liftZapCtx(m)
+		liftJSONAliases(m)
 	}
 
 	return f.render(m)
+}
+
+// jsonAliases are the keys other JSON loggers use for zap's "ts" and "msg" —
+// notably log/slog's JSONHandler, which writes "time" and "msg" — mapped onto
+// the keys the formatter renders.
+var jsonAliases = map[string]string{
+	"time": keyTime, "timestamp": keyTime, "@timestamp": keyTime,
+	"message": keyMessage,
+}
+
+// liftJSONAliases renames the well-known aliases of a non-zap JSON logger onto
+// zap's keys, so a slog line's timestamp is rendered rather than shown as a
+// stray time= field. A key zap itself populated always wins.
+func liftJSONAliases(m map[string]jx.Raw) {
+	for alias, key := range jsonAliases {
+		v, ok := m[alias]
+		if !ok || len(v) == 0 {
+			continue
+		}
+		if _, ok := m[key]; ok {
+			continue
+		}
+		if key == keyTime {
+			if _, ok := parseTime(v); !ok {
+				continue
+			}
+		}
+		m[key] = v
+		delete(m, alias)
+	}
 }
 
 // parseText normalizes a non-JSON line onto zap's keys, returning false when the
@@ -223,6 +255,13 @@ func (f *Formatter) render(m map[string]jx.Raw) (out string, ok bool) {
 	}
 
 	var b strings.Builder
+
+	// Text preceding a logfmt payload (a syslog or container prefix), dimmed so
+	// it does not compete with the message.
+	if p := asString(m[keyPrefix]); p != "" {
+		b.WriteString(f.paint(colDim, p))
+		b.WriteByte(' ')
+	}
 
 	// Timestamp.
 	if !f.NoTime {

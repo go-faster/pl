@@ -15,12 +15,21 @@ var logfmtKeys = map[string]string{
 	"t": keyTime, "ts": keyTime, "time": keyTime, "timestamp": keyTime, "@timestamp": keyTime,
 	"msg": keyMessage, "message": keyMessage,
 	"logger": keyLogger,
-	"caller": keyCaller,
-	"err":    keyError, keyError: keyError,
+	// "source" is what Go's slog handlers (Prometheus, Alertmanager, ...) call
+	// the caller; it is only taken as one when it looks like a source location,
+	// since other loggers use it for a component name.
+	"caller": keyCaller, "source": keyCaller,
+	"err": keyError, keyError: keyError,
 	"stacktrace": keyStacktrace, "stack": keyStacktrace,
 	"trace_id": keyTraceID, "traceid": keyTraceID, "traceID": keyTraceID, "traceId": keyTraceID,
 	"span_id": keySpanID, "spanid": keySpanID, "spanID": keySpanID, "spanId": keySpanID,
 }
+
+// keyPrefix holds the text preceding the first key=value pair — a syslog or
+// container prefix, as journalctl writes ahead of a logfmt payload. It is shown
+// verbatim instead of being scanned into bogus fields. The leading NUL keeps it
+// from colliding with any real field name.
+const keyPrefix = "\x00prefix"
 
 // keyLevelText holds a level token pl has no zap level for, so it is shown as a
 // field instead of being dropped with the reserved "level" key.
@@ -62,6 +71,7 @@ func parseLogfmt(line string) (map[string]jx.Raw, bool) {
 	}) {
 		return nil, false
 	}
+	putLogfmtPrefix(m)
 	if seen.count() < 2 {
 		return nil, false
 	}
@@ -77,11 +87,21 @@ func parseLogfmt(line string) (map[string]jx.Raw, bool) {
 // logfmt reads as a true flag.
 func putLogfmtField(m map[string]jx.Raw, key, val string, quoted, hasVal bool) seenFields {
 	if !hasVal {
-		m[key] = jx.Raw("true")
+		// A token with no value. logfmt reads it as a true flag, but in practice
+		// it is the prose a line is prefixed with — "Jul 26 12:28:52 host
+		// unit[1063]:" from journalctl, say — which reads far better kept as
+		// text than exploded into "Jul=true host=true" fields.
+		if p := asString(m[keyPrefix]); p != "" {
+			key = p + " " + key
+		}
+		m[keyPrefix] = rawString(key)
 		return 0
 	}
 	switch logfmtKeys[key] {
 	case keyLevel:
+		if _, ok := m[keyLevel]; ok {
+			break
+		}
 		lvl, ok := normalizeLevel(val)
 		if !ok {
 			// A level pl cannot render (a custom token, or an empty one as
@@ -96,15 +116,33 @@ func putLogfmtField(m map[string]jx.Raw, key, val string, quoted, hasVal bool) s
 		m[keyLevel] = rawString(lvl)
 		return seenLevel
 	case keyTime:
-		m[keyTime] = logfmtValue(val, quoted)
+		// Only a value that is actually a timestamp may claim the slot: a line
+		// can carry both a time= header and an unrelated timestamp= field, as
+		// navidrome's scrobbles do, and the latter must not blank the former.
+		raw := logfmtValue(val, quoted)
+		if _, ok := m[keyTime]; ok {
+			break
+		}
+		if _, ok := parseTime(raw); !ok {
+			break
+		}
+		m[keyTime] = raw
 		return seenTime
 	case keyMessage:
+		if _, ok := m[keyMessage]; ok {
+			break
+		}
 		m[keyMessage] = rawString(val)
 		return seenMessage
 	case keyLogger:
 		m[keyLogger] = rawString(val)
 		return 0
 	case keyCaller:
+		// slog handlers name the caller "source", but other loggers use that key
+		// for a component name; take it only when it is a source location.
+		if key == "source" && !isStackLocation(val) {
+			break
+		}
 		m[keyCaller] = rawString(val)
 		return 0
 	case keyError:
@@ -126,6 +164,15 @@ func putLogfmtField(m map[string]jx.Raw, key, val string, quoted, hasVal bool) s
 	}
 	m[key] = logfmtValue(val, quoted)
 	return 0
+}
+
+// putLogfmtPrefix drops a prefix that turned out to hold the whole line: with no
+// key=value pair before it, the "prefix" is just text, and the line is not
+// logfmt (see parseLogfmt).
+func putLogfmtPrefix(m map[string]jx.Raw) {
+	if len(m) == 1 {
+		delete(m, keyPrefix)
+	}
 }
 
 // logfmtValue converts a logfmt value into JSON, deducing numbers and bools from

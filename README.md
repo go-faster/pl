@@ -63,6 +63,9 @@ Kubernetes deployment, so `kubectl logs` output reads like the rest:
   becomes a `key=value` field, with numbers and booleans kept as such. A line is
   only treated as logfmt when it carries at least two of level, timestamp and
   message — plain prose is passed through rather than mangled into fields.
+  Text before the first pair — journalctl's `Jul 26 12:28:52 host unit[1063]:`
+  prefix, say — is kept verbatim ahead of the entry instead of being scanned into
+  fields.
 - **klog** (kube-apiserver, kubelet, and everything else built on
   [`k8s.io/klog`](https://github.com/kubernetes/klog)) — the header supplies the
   level, timestamp, `thread.id` and caller; structured klog's quoted message and
@@ -73,6 +76,9 @@ Kubernetes deployment, so `kubectl logs` output reads like the rest:
 $ kubectl logs kubelet | pl
 01:22:17.141 E Startup probe already exists for container containerName=cilium-envoy pod=kube-system/cilium-envoy-vxgzg thread.id=1386 (prober_manager.go:197)
 ```
+
+JSON lines from `log/slog`'s handler, which names its fields `time` and `msg`,
+are rendered like zap's.
 
 Timestamps in these formats are parsed from RFC3339 or from a numeric epoch,
 whose unit (seconds, milliseconds, microseconds or nanoseconds) is deduced from

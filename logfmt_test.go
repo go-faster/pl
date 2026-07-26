@@ -44,9 +44,38 @@ func TestFormat_Logfmt(t *testing.T) {
 			want: []string{"severity_text=audit", "hi"},
 		},
 		{
+			// Prometheus and Alertmanager (Go slog) name the caller "source".
+			name: "slog source as caller",
+			line: `time=2026-07-26T08:18:31.944Z level=INFO source=tls_config.go:347 msg="Listening on" address=[::]:9093`,
+			want: []string{"I ", "Listening on", "address=[::]:9093", "(tls_config.go:347)"},
+			skip: []string{"source="},
+		},
+		{
+			// Other loggers use "source" for a component name, which is not a
+			// caller and must stay a plain field.
+			name: "non-location source stays a field",
+			line: `t=2023-12-19T06:57:42Z level=info msg=hi source=scheduler`,
+			want: []string{"source=scheduler"},
+		},
+		{
+			// navidrome logs a scrobble time alongside the line's own time; the
+			// unrelated field must not take over (nor blank) the timestamp.
+			name: "unparsable timestamp field",
+			line: `time="2026-07-26T09:27:04Z" level=info msg=Scrobbled timestamp="2026-07-26 09:27:04.91 +0000 UTC" user=admin`,
+			want: []string{"09:27:04.000", "I ", "Scrobbled", `timestamp="2026-07-26 09:27:04.91 +0000 UTC"`},
+		},
+		{
 			name: "quoted value with spaces",
-			line: `level=debug time="2015-03-26T01:27:38-04:00" foo=bar baz="hello kitty" flag`,
-			want: []string{"D ", "foo=bar", `baz="hello kitty"`, "flag=true"},
+			line: `level=debug time="2015-03-26T01:27:38-04:00" foo=bar baz="hello kitty"`,
+			want: []string{"D ", "foo=bar", `baz="hello kitty"`},
+		},
+		{
+			// journalctl prefixes the payload with a date, host and unit; that
+			// text is kept as-is instead of becoming "Jul=true host=true".
+			name: "syslog prefix",
+			line: `Jul 26 12:28:52 tdakkota-pc docker-pull-shim[1063]: time=2026-07-26T12:28:52.261Z level=DEBUG msg=request method=GET`,
+			want: []string{"Jul 26 12:28:52 tdakkota-pc docker-pull-shim[1063]: ", "D ", "request", "method=GET"},
+			skip: []string{"=true"},
 		},
 		{
 			name: "epoch millis",
