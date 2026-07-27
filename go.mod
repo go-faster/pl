@@ -3,7 +3,7 @@ module github.com/go-faster/pl
 go 1.23.3
 
 require (
-	github.com/go-faster/errors v0.7.1
+	github.com/go-faster/errors v0.8.0
 	github.com/go-faster/jx v1.2.0
 	github.com/spf13/cobra v1.10.2
 	go.uber.org/zap v1.28.0
