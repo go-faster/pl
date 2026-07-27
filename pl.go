@@ -1,8 +1,8 @@
 // Package pl tails and pretty-prints JSONL logs produced by zap
 // (the zap.NewProductionConfig JSON encoder used by go-faster/sdk) as well as
-// OpenTelemetry log records in the logs data model JSON form. Each line is
-// detected and normalized onto a shared rendering path, so a stream mixing the
-// two formats reads uniformly.
+// OpenTelemetry log records in the logs data model JSON form, plus the
+// plain-text logfmt and klog formats. Each line is detected and normalized onto
+// a shared rendering path, so a stream mixing the formats reads uniformly.
 package pl
 
 import (
@@ -45,7 +45,11 @@ var reserved = map[string]struct{}{
 	keyError:        {},
 	keyErrorVerbose: {},
 	keyResource:     {},
+	keyPrefix:       {},
 }
+
+// defaultTimeFormat is the layout used when Formatter.TimeFormat is unset.
+const defaultTimeFormat = "15:04:05.000"
 
 // ANSI color codes.
 const (
@@ -133,24 +137,30 @@ func (f *Formatter) paint(color, s string) string {
 
 func (f *Formatter) timeFormat() string {
 	if f.TimeFormat == "" {
-		return "15:04:05.000"
+		return defaultTimeFormat
 	}
 	return f.TimeFormat
 }
 
-// Format parses a single JSON log line and returns its pretty representation.
+// Format parses a single log line and returns its pretty representation.
 //
-// The returned bool reports whether the line should be printed. Lines that are
-// not valid zap JSON are returned unchanged (and ok is true) so that mixed
-// output is preserved. Lines below MinLevel are dropped (ok is false).
+// The returned bool reports whether the line should be printed. Lines in none of
+// the supported formats — zap and OTEL JSON, logfmt, klog — are returned
+// unchanged (and ok is true) so that mixed output is preserved. Lines below
+// MinLevel are dropped (ok is false).
 func (f *Formatter) Format(line []byte) (out string, ok bool) {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 {
 		return "", false
 	}
 	if trimmed[0] != '{' {
-		// Not a JSON object, pass through — unless a trace filter is active, in
-		// which case a line with no trace_id cannot match.
+		// Plain text: klog and logfmt lines are normalized onto zap's keys and
+		// rendered like everything else; anything else passes through — unless a
+		// trace filter is active, in which case a line with no trace_id cannot
+		// match.
+		if m, ok := f.parseText(string(trimmed)); ok {
+			return f.render(m)
+		}
 		if f.TraceID != "" {
 			return "", false
 		}
@@ -185,8 +195,56 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 		// A zap line: flatten zctx's reflected "ctx" object (otelzap mode) so
 		// span_id/trace_id surface as ordinary fields instead of a JSON blob.
 		liftZapCtx(m)
+		liftJSONAliases(m)
 	}
 
+	return f.render(m)
+}
+
+// jsonAliases are the keys other JSON loggers use for zap's "ts" and "msg" —
+// notably log/slog's JSONHandler, which writes "time" and "msg" — mapped onto
+// the keys the formatter renders.
+var jsonAliases = map[string]string{
+	"time": keyTime, "timestamp": keyTime, "@timestamp": keyTime,
+	"message": keyMessage,
+}
+
+// liftJSONAliases renames the well-known aliases of a non-zap JSON logger onto
+// zap's keys, so a slog line's timestamp is rendered rather than shown as a
+// stray time= field. A key zap itself populated always wins.
+func liftJSONAliases(m map[string]jx.Raw) {
+	for alias, key := range jsonAliases {
+		v, ok := m[alias]
+		if !ok || len(v) == 0 {
+			continue
+		}
+		if _, ok := m[key]; ok {
+			continue
+		}
+		if key == keyTime {
+			if _, ok := parseTime(v); !ok {
+				continue
+			}
+		}
+		m[key] = v
+		delete(m, alias)
+	}
+}
+
+// parseText normalizes a non-JSON line onto zap's keys, returning false when the
+// line is in none of the plain-text formats pl understands (klog, logfmt) and
+// should be passed through verbatim.
+func (f *Formatter) parseText(line string) (map[string]jx.Raw, bool) {
+	if m, ok := parseKLog(line, time.Now()); ok {
+		return m, true
+	}
+	return parseLogfmt(line)
+}
+
+// render writes out a log record already normalized onto zap's field keys,
+// applying the trace and level filters. The returned bool reports whether the
+// line should be printed.
+func (f *Formatter) render(m map[string]jx.Raw) (out string, ok bool) {
 	if f.TraceID != "" && !strings.EqualFold(asString(m[keyTraceID]), f.TraceID) {
 		return "", false
 	}
@@ -197,6 +255,13 @@ func (f *Formatter) Format(line []byte) (out string, ok bool) {
 	}
 
 	var b strings.Builder
+
+	// Text preceding a logfmt payload (a syslog or container prefix), dimmed so
+	// it does not compete with the message.
+	if p := asString(m[keyPrefix]); p != "" {
+		b.WriteString(f.paint(colDim, p))
+		b.WriteByte(' ')
+	}
 
 	// Timestamp.
 	if !f.NoTime {
@@ -384,13 +449,35 @@ func parseTime(raw jx.Raw) (time.Time, bool) {
 		}
 		return time.Time{}, false
 	}
-	// Numeric epoch (seconds, possibly fractional).
+	// Numeric epoch. Integers keep integer arithmetic: an epoch in milliseconds
+	// or finer does not survive a float64 division intact.
+	if n, err := strconv.ParseInt(string(raw), 10, 64); err == nil {
+		return time.Unix(0, n*int64(epochUnit(float64(n)))).Local(), true
+	}
 	num, err := jx.DecodeBytes(raw).Float64()
 	if err != nil {
 		return time.Time{}, false
 	}
-	sec, frac := math.Modf(num)
-	return time.Unix(int64(sec), int64(frac*1e9)).Local(), true
+	return time.Unix(0, int64(math.Round(num*float64(epochUnit(num))))).Local(), true
+}
+
+// epochUnit deduces the unit of a numeric epoch timestamp from its magnitude.
+// zap logs fractional seconds, but other loggers (whose lines arrive as logfmt)
+// count milliseconds, microseconds or nanoseconds; anything past the year 2000
+// in a finer unit would otherwise render as a date tens of thousands of years
+// out.
+func epochUnit(num float64) time.Duration {
+	const y2k = 946684800 // 2000-01-01T00:00:00Z, in seconds.
+	switch {
+	case num >= y2k*1e9:
+		return time.Nanosecond
+	case num >= y2k*1e6:
+		return time.Microsecond
+	case num >= y2k*1e3:
+		return time.Millisecond
+	default:
+		return time.Second
+	}
 }
 
 // asString returns the string value of raw, unquoting JSON strings. For

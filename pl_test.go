@@ -23,6 +23,39 @@ func TestFormat_Production(t *testing.T) {
 	}
 }
 
+// log/slog's JSONHandler writes "time" where zap writes "ts"; it must render as
+// the timestamp rather than as a stray field.
+func TestFormat_SlogJSON(t *testing.T) {
+	line := `{"time":"2026-07-26T08:18:47.183257057Z","level":"INFO","msg":"server session connected","component":"mcp-sdk"}`
+	f := &Formatter{Location: time.UTC}
+	out, ok := f.Format([]byte(line))
+	if !ok {
+		t.Fatal("expected line to be printed")
+	}
+	for _, want := range []string{"08:18:47.183", "I ", "server session connected", "component=mcp-sdk"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output %q missing %q", out, want)
+		}
+	}
+	if strings.Contains(out, "time=") {
+		t.Errorf("timestamp left as a field: %q", out)
+	}
+}
+
+// A "time" field that is not a timestamp stays a plain field, and zap's own ts
+// wins over an alias.
+func TestFormat_SlogJSONAliasGuard(t *testing.T) {
+	f := &Formatter{Location: time.UTC, TimeFormat: "15:04:05"}
+	out, _ := f.Format([]byte(`{"level":"info","msg":"m","time":"a while ago"}`))
+	if !strings.Contains(out, `time="a while ago"`) {
+		t.Errorf("unparsable time not kept as a field: %q", out)
+	}
+	out, _ = f.Format([]byte(`{"level":"info","msg":"m","ts":1620000000,"time":"2026-07-26T08:18:47Z"}`))
+	if !strings.HasPrefix(out, "00:00:00 ") {
+		t.Errorf("zap ts should win over the alias: %q", out)
+	}
+}
+
 func TestFormat_NoTime(t *testing.T) {
 	line := `{"level":"info","ts":1620000000.123,"msg":"hi"}`
 	f := &Formatter{NoTime: true}

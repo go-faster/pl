@@ -48,11 +48,13 @@ const (
 
 // zap level name tokens, the form parseLevel understands.
 const (
-	levelDebug = "debug"
-	levelInfo  = "info"
-	levelWarn  = "warn"
-	levelError = "error"
-	levelFatal = "fatal"
+	levelDebug  = "debug"
+	levelInfo   = "info"
+	levelWarn   = "warn"
+	levelError  = "error"
+	levelDPanic = "dpanic"
+	levelPanic  = "panic"
+	levelFatal  = "fatal"
 )
 
 // isOTEL reports whether the parsed object is an OpenTelemetry log record (the
