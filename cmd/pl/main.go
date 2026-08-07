@@ -25,6 +25,9 @@ func root() *cobra.Command {
 		traceID      string
 		otelResource bool
 		otelFunc     bool
+		noStack      bool
+		noErrVerbose bool
+		noStacks     bool
 	)
 
 	cmd := &cobra.Command{
@@ -45,6 +48,9 @@ func root() *cobra.Command {
 				TraceID:      traceID,
 				OTELResource: otelResource,
 				OTELFunc:     otelFunc,
+
+				NoStacktrace:   noStack || noStacks,
+				NoErrorVerbose: noErrVerbose || noStacks,
 			}
 			if timezone != "" {
 				loc, err := time.LoadLocation(timezone)
@@ -105,6 +111,9 @@ func root() *cobra.Command {
 	cmd.Flags().StringVar(&timezone, "timezone", "", "convert timestamps to this timezone (e.g. UTC, Local, America/New_York)")
 	cmd.Flags().BoolVar(&otelResource, "otel-resource", false, "include OpenTelemetry resource attributes as fields (OTEL logs only)")
 	cmd.Flags().BoolVar(&otelFunc, "otel-func", false, "include the function name in the caller (OTEL logs only)")
+	cmd.Flags().BoolVar(&noStack, "no-stacktrace", false, "omit the zap stacktrace block")
+	cmd.Flags().BoolVar(&noErrVerbose, "no-error-verbose", false, "omit the go-faster/errors verbose error block")
+	cmd.Flags().BoolVar(&noStacks, "no-stacks", false, "omit both stack blocks (--no-stacktrace and --no-error-verbose)")
 
 	return cmd
 }

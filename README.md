@@ -103,6 +103,9 @@ pl --trace-id a30d8906e0e519424360816608e11188 service.log
     --timezone       convert timestamps to this timezone (e.g. UTC, Local, America/New_York)
     --otel-resource  include OpenTelemetry resource attributes (OTEL logs only)
     --otel-func      include the function name in the caller (OTEL logs only)
+    --no-stacktrace  omit the zap stacktrace block
+    --no-error-verbose  omit the go-faster/errors verbose error block
+    --no-stacks      omit both stack blocks
 ```
 
 `--otel-resource` prints the resource attributes on their own indented lines

@@ -118,6 +118,11 @@ type Formatter struct {
 	// the caller of OpenTelemetry log records. Dropped by default as it
 	// duplicates the source location.
 	OTELFunc bool
+	// NoStacktrace omits the zap "stacktrace" block from the output.
+	NoStacktrace bool
+	// NoErrorVerbose omits the go-faster/errors "errorVerbose" block from the
+	// output.
+	NoErrorVerbose bool
 
 	levelSet bool
 }
@@ -329,12 +334,12 @@ func (f *Formatter) render(m map[string]jx.Raw) (out string, ok bool) {
 
 	// Verbose error on following indented lines, in a warm palette (red error
 	// text, yellow frames) so it is not confused with the runtime stacktrace.
-	if ev := asString(m[keyErrorVerbose]); ev != "" {
+	if ev := asString(m[keyErrorVerbose]); ev != "" && !f.NoErrorVerbose {
 		f.writeStack(&b, ev, colRed, colYellow)
 	}
 
 	// Stacktrace on following indented lines, in a cool palette (blue frames).
-	if st := asString(m[keyStacktrace]); st != "" {
+	if st := asString(m[keyStacktrace]); st != "" && !f.NoStacktrace {
 		f.writeStack(&b, st, colDim, colBlue)
 	}
 

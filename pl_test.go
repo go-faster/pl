@@ -399,6 +399,35 @@ func TestFormat_ErrorVerboseDistinctColor(t *testing.T) {
 	}
 }
 
+func TestFormat_SkipStacks(t *testing.T) {
+	const line = `{"level":"error","msg":"boom","errorVerbose":"e1\ne2","stacktrace":"s1\ns2"}`
+	for _, tt := range []struct {
+		name string
+		f    Formatter
+		skip []string
+		want []string
+	}{
+		{"no stacktrace", Formatter{NoStacktrace: true}, []string{"s1"}, []string{"e1"}},
+		{"no error verbose", Formatter{NoErrorVerbose: true}, []string{"e1"}, []string{"s1"}},
+		{"neither", Formatter{NoStacktrace: true, NoErrorVerbose: true}, []string{"e1", "s1"}, []string{"boom"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.f.NoTime = true
+			out, _ := tt.f.Format([]byte(line))
+			for _, s := range tt.skip {
+				if strings.Contains(out, s) {
+					t.Errorf("%q should be omitted: %q", s, out)
+				}
+			}
+			for _, s := range tt.want {
+				if !strings.Contains(out, s) {
+					t.Errorf("%q should be kept: %q", s, out)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderError(t *testing.T) {
 	if renderError(nil) != "" {
 		t.Error("empty raw should render empty")
